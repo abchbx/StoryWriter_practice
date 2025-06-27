@@ -14,7 +14,7 @@ from openai import OpenAI
 # 1. 配置信息 (Configuration)
 # ==============================================================================
 # 使用腾讯混元大模型作为示例
-# 请将 'sk-' 替换为您自己的 API Key
+
 url = "https://api.hunyuan.cloud.tencent.com/v1"
 config_list = [
     {
@@ -322,9 +322,9 @@ def story_generate(premise: str, event_str: str, id: str, output_prefix: str) ->
             print("Outcome: Approved.")
             final_story_parts.append(generated_story_part)
         else:
-            print("Outcome: Rejected. (In a real scenario, you would loop here to rewrite)")
-            # 为简化，我们仍然保留被拒绝的部分，但在前面加上标记
-            final_story_parts.append(f"[REJECTED] {generated_story_part}")
+            print("Outcome: Disapproved, but adding to story anyway (without REJECTED tag).")
+            # 关键改动：无论是否通过，都直接添加原始的故事片段
+            final_story_parts.append(generated_story_part)
 
     # --- 步骤 3: 保存结果 ---
     print("\n--- Step 3.3: Saving the final story ---")
