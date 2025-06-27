@@ -13,14 +13,16 @@ from openai import OpenAI
 # ==============================================================================
 # 1. 配置信息 (Configuration)
 # ==============================================================================
-# 使用腾讯混元大模型作为示例
+# 【安全建议】: 请不要将 API Key 直接写入代码中。
+# 推荐使用环境变量或配置文件来管理您的密钥。
+API_KEY = "sk-" # <--- 请在这里填入您的 API Key
+BASE_URL = "https://api.hunyuan.cloud.tencent.com/v1"
 
-url = "https://api.hunyuan.cloud.tencent.com/v1"
 config_list = [
     {
         "model": "hunyuan-lite",
-        "base_url": url,
-        "api_key": "sk-",  #  <--- 请在这里填入您的 API Key
+        "base_url": BASE_URL,
+        "api_key": API_KEY,
         "api_type": "openai",
         "price": [0.001, 0.001],
     },
@@ -40,10 +42,9 @@ class MessageRedact:
     def __init__(self):
         self.condensed_cache = {}
         # 初始化 OpenAI 客户端用于调用压缩模型
-        # 请将 'sk-' 替换为您自己的 API Key
         self.client = OpenAI(
-            api_key="sk-",  #  <--- 请在这里填入您的 API Key
-            base_url="https://api.hunyuan.cloud.tencent.com/v1",
+            api_key=API_KEY,
+            base_url=BASE_URL,
         )
         # 优化后的压缩指令
         self.prompt_template = """
@@ -65,11 +66,9 @@ class MessageRedact:
         # 我们只压缩中间的对话历史，保留第一条和最后两条消息的完整性
         if len(temp_messages) > 3:
             for message in temp_messages[1:-2]:
-                content = message.get("content", "")
-                message_id = hash(content)
-
-                # 仅当消息内容足够长时才进行压缩
-                if len(content) > 150:
+                content = message.get("content")
+                if isinstance(content, str) and len(content) > 150:
+                    message_id = hash(content)
                     if message_id in self.condensed_cache:
                         print(f"INFO: Using cached condensed message for role: {message['role']}")
                         message["content"] = self.condensed_cache[message_id]
@@ -87,7 +86,6 @@ class MessageRedact:
                             print("INFO: Compression successful.")
                         except Exception as e:
                             print(f"ERROR: Could not compress message due to: {e}")
-                            # 压缩失败则使用原内容
                             pass
                             
         return temp_messages
@@ -114,19 +112,21 @@ def event_generate(premise: str, id: str, output_prefix: str) -> str:
     # 角色1: 事件生成器
     event_creator = ConversableAgent(
         name="EventCreator",
-        system_message="""
-你是一位富有创意的故事策划师。你的任务是根据给定的故事大纲，设计出一系列结构完整、富有戏剧性的事件。
+        # 【提示词修正】: 强调必须围绕 premise 进行创作
+        system_message=f"""
+你是一位富有创意的故事策划师。你的核心任务是根据下面提供的【故事大纲 (Premise)】，设计出一系列结构完整、富有戏剧性的事件。
+
+**你的所有工作都必须严格服务于这个核心大纲：**
+`{premise}`
 
 请严格按照以下格式为每个事件生成梗概，并确保内容翔实且引人入胜：
 
-**事件**: [为事件起一个简洁的标题，例如：意外的相遇]
-**场景**: [描述事件发生的时间、地点和环境氛围，例如：一个暴雨的夜晚，在城市边缘一家即将打烊的咖啡馆里]
+**事件**: [为事件起一个简洁的标题]
+**场景**: [描述事件发生的时间、地点和环境氛围]
 **角色**: [列出参与此事件的核心角色]
 **行动**: [描述角色在此场景中的具体行为和对话]
-**冲突**: [明确指出此事件中的核心矛盾点，是角色之间的、角色与环境的，还是角色内心的挣扎]
-**情节转折**: [设计一个出人意料的转折或发现，推动故事向前发展]
-
-请确保每个事件都紧扣故事大纲，并为后续事件的发生埋下伏笔。
+**冲突**: [明确指出此事件中的核心矛盾点]
+**情节转折**: [设计一个出人意料的转折或发现]
 """,
         llm_config={"config_list": config_list, "temperature": 1.0},
         human_input_mode="NEVER",
@@ -136,18 +136,19 @@ def event_generate(premise: str, id: str, output_prefix: str) -> str:
     # 角色2: 事件审核员
     event_auditor = ConversableAgent(
         name="EventAuditor",
+        # 【提示词修正】: 将“一致性”作为最高评估标准
         system_message="""
 你是一位经验丰富的剧本医生。你的任务是评估上一个代理生成的事件梗概是否合格。
 
-**评估标准:**
-1.  **逻辑性**: 事件的起因、经过、结果是否符合逻辑？情节转折是否突兀？
+**评估标准 (按重要性排序):**
+1.  **核心一致性**: 这是【最高优先级】。事件是否绝对忠实于故事大纲 (Premise) 的核心设定？
 2.  **戏剧性**: 冲突是否足够强烈？情节是否引人入胜？
-3.  **一致性**: 事件是否与故事大纲的核心设定保持一致？
+3.  **逻辑性**: 事件的起因、经过、结果是否符合逻辑？情节转折是否突兀？
 4.  **完整性**: 是否严格遵循了要求的格式（事件、场景、角色、行动、冲突、情节转折）？
 
 **指令:**
 - 如果事件在以上四个方面都表现出色，请直接回复 `TERMINATE`。
-- 如果事件存在明显逻辑漏洞、缺乏戏剧性或不符合大纲，请回复 `重新生成`，并简要说明需要改进的核心问题，例如：“重新生成：冲突不够激烈，情节转折缺乏惊喜。”
+- 如果事件【不符合核心一致性】，或存在其他明显缺陷，请回复 `重新生成`，并简要说明需要改进的核心问题。
 """,
         llm_config={"config_list": config_list, "temperature": 0.4},
         human_input_mode="NEVER",
@@ -158,10 +159,10 @@ def event_generate(premise: str, id: str, output_prefix: str) -> str:
     while try_count < 5:
         try:
             print(f"INFO: Attempting to generate events, try #{try_count + 1}...")
-            initial_message = f"故事大纲: {premise}"
-            event_auditor.initiate_chat(event_creator, message=initial_message, max_turns=10)
+            # 注意：这里的 initial_message 只是对话的开始，真正的指令在 system_message 中
+            event_auditor.initiate_chat(event_creator, message="请根据我提供给你的故事大纲开始创作事件。", max_turns=10)
             print("INFO: Event generation successful.")
-            break
+            break 
         except Exception as e:
             try_count += 1
             print(f"WARNING: Event generation failed with error: {e}. Retrying...")
@@ -178,7 +179,17 @@ def event_generate(premise: str, id: str, output_prefix: str) -> str:
     with open(output_path, "w", encoding="utf-8") as file:
         json.dump(messages, file, ensure_ascii=False, indent=4)
         
-    final_event_list = event_auditor.chat_messages[event_creator][-2]['content']
+    final_event_list = ""
+    chat_history = event_auditor.chat_messages.get(event_creator)
+    if chat_history and len(chat_history) >= 2:
+        content = chat_history[-2].get("content")
+        if isinstance(content, str):
+            final_event_list = content
+        else:
+            print(f"WARNING: Expected a string from message content, but got {type(content)}. Using empty string.")
+    else:
+        print("WARNING: Could not find sufficient chat history to extract final event list.")
+        
     return final_event_list
 
 
@@ -186,17 +197,19 @@ def event_extract(text_data: str, id: str, output_prefix: str) -> str:
     """
     从生成的文本中抽取出事件描述。
     """
+    if not isinstance(text_data, str):
+        print(f"ERROR: event_extract expects a string, but got {type(text_data)}.")
+        return ""
+        
     print("INFO: Extracting structured events from text...")
-    # 正则表达式用于匹配以“事件:”或“Event”开头的段落
     event_pattern = r"(?i)(?:\*\*事件\*\*|Event)[\s:]*.*?(?=\n\n(?i)(?:\*\*事件\*\*|Event)|$)"
     events = re.findall(event_pattern, text_data, re.DOTALL)
 
-    if events:
-        print(f"INFO: Extracted {len(events)} events.")
-    else:
+    if not events:
         print("WARNING: No events found in the text.")
         return ""
-
+    
+    print(f"INFO: Extracted {len(events)} events.")
     event_data = {"events": [{"event": event.strip()} for event in events]}
     
     output_dir = os.path.join(output_prefix, "final_process")
@@ -213,12 +226,10 @@ def event_extract(text_data: str, id: str, output_prefix: str) -> str:
 def story_generate(premise: str, event_str: str, id: str, output_prefix: str) -> str:
     """
     基于事件列表，通过多代理协作生成完整的故事。
-    [已重构以解决 system message 顺序问题]
     """
     print("INFO: Story generation process started using a sequential workflow.")
 
-    # --- 代理定义 (保持不变) ---
-    # 我们将代理的指令暂时存储在system_message中，但在调用时会手动处理。
+    # --- 代理定义 ---
     sub_events_divider = ConversableAgent(
         name="SubEventsDivider",
         system_message="""你是一个专业的叙事结构设计师。你的任务是将给定的“事件”分解成多个逻辑递进、情节更细化的“子事件”。确保划分后的子事件共同构成一个完整的小型叙事弧（开端-发展-高潮），并严格遵循输出格式。""",
@@ -228,29 +239,36 @@ def story_generate(premise: str, event_str: str, id: str, output_prefix: str) ->
 
     story_writer = ConversableAgent(
         name="StoryWriter",
-        system_message="""你是一位才华横溢的小说家。你的任务是根据给定的子事件，创作出一段生动、细腻、引人入胜的故事。
+        # 【提示词修正】: 在作家的核心职责中就强调 premise
+        system_message="""你是一位才华横溢的小说家。你的【首要且不可违背的职责】是围绕一个【核心设定 (Premise)】来创作故事。
+
 **写作要求:**
-1. **聚焦当前**: 你的创作内容必须仅仅围绕当前指定的子事件展开。
-2. **生动描写**: 运用感官细节、角色心理活动和精彩的对话来丰满故事情节。
-3. **输出格式**: 直接输出故事文本，不要添加任何标题或标签。""",
+1. **服从核心**: 你的所有创作都【必须】严格服务于我将提供给你的【核心设定】。
+2. **聚焦当前**: 在遵循核心设定的前提下，将创作内容聚焦于我指定的【当前子事件】。
+3. **生动描写**: 运用感官细节、角色心理活动和精彩的对话来丰满故事情节。
+4. **输出格式**: 直接输出故事文本，不要添加任何标题或标签。""",
         llm_config={"config_list": config_list, "temperature": 1.0},
         human_input_mode="NEVER",
     )
-    redact_handling.add_to_agent(story_writer) # 为写手启用上下文压缩
+    redact_handling.add_to_agent(story_writer)
 
     story_critic = ConversableAgent(
         name="StoryCritic",
-        system_message=f"""你是一名严格的剧本监督。你的唯一职责是确保故事严格按照预设的核心设定（Premise）和子事件发展。
-**核心设定 (Premise)**: {premise}
+        # 【提示词修正】: 批评家的指令也更强化
+        system_message=f"""你是一名极其严格的剧本监督。你的唯一职责是【逐字逐句地】审查故事，确保其严格按照预设的【核心设定 (Premise)】发展。
+
+**【核心设定 (Premise)】 - 这是唯一的评判标准**:
+`{premise}`
+
 **指令**:
-- 如果故事内容符合要求，请回复 `APPROVE`。
-- 如果内容发生偏离，请回复 `REWRITE:` 并附上具体的修改意见。""",
+- 如果故事内容【完全符合】核心设定，请只回复 `APPROVE`。
+- 如果内容【哪怕有丝毫偏离】，请立即回复 `REWRITE:` 并附上具体的、必须修改的意见。""",
         llm_config={"config_list": config_list, "temperature": 0.2},
         human_input_mode="NEVER",
     )
 
     # --- 步骤 1: 划分出子事件 ---
-    print("\n--- Step 3.1: Dividing events into sub-events ---")
+    print("\n--- Step 1: Dividing events into sub-events ---")
     sub_events_prompt = f"""
 {sub_events_divider.system_message}
 
@@ -263,48 +281,51 @@ def story_generate(premise: str, event_str: str, id: str, output_prefix: str) ->
 **需要处理的事件如下:**
 {event_str}
 """
-    # 创建一个临时的“用户代理”来发起对话
     user_proxy = ConversableAgent("user_proxy", human_input_mode="NEVER", llm_config=False)
     
     try:
         user_proxy.initiate_chat(sub_events_divider, message=sub_events_prompt, max_turns=1)
-        sub_events_text = sub_events_divider.last_message()["content"]
+        last_msg = sub_events_divider.last_message()
+        sub_events_text = last_msg.get("content") if last_msg else None
+
+        if not isinstance(sub_events_text, str):
+            print(f"ERROR: Failed to get valid sub-events text. Got: {sub_events_text}")
+            return "stop"
+        
         print("INFO: Sub-events created successfully.")
-        # 在这里可以添加解析sub_events_text的代码，将其转换为列表
     except Exception as e:
         print(f"ERROR: Failed to create sub-events: {e}")
         return "stop"
     
-    # (为了简化，我们假设模型完美输出了子事件，并直接将其用于下一步)
-    # 在生产环境中，您需要用正则表达式或更可靠的方法来解析这里的 'sub_events_text'
-    
     # --- 步骤 2: 循环生成和批判每个子事件的故事 ---
-    # 这是最关键的部分，我们模拟一个简单的写作-批判循环
-    print("\n--- Step 3.2: Writing and critiquing story for each sub-event ---")
+    print("\n--- Step 2: Writing and critiquing story for each sub-event ---")
     final_story_parts = []
-    
-    # 假设的子事件列表 (需要从sub_events_text中解析)
-    # 这里用一个简单的例子代替真实的解析逻辑
-    # 您需要实现一个函数来从 'sub_events_text' 提取出这样的列表
+
     sub_event_list = [line for line in sub_events_text.split('\n') if re.match(r'事件\d\.\d:', line)]
     if not sub_event_list:
-        print("ERROR: Could not parse sub-events from the output. Using raw output.")
-        sub_event_list = [sub_events_text] # Fallback
+        print("ERROR: Could not parse sub-events from the output. Using raw output as fallback.")
+        sub_event_list = [sub_events_text]
 
     for i, sub_event in enumerate(sub_event_list):
-        print(f"\nProcessing sub-event {i+1}/{len(sub_event_list)}: {sub_event[:50]}...")
+        print(f"\nProcessing sub-event {i+1}/{len(sub_event_list)}: {sub_event[:80]}...")
         
-        # 为了避免system message问题，我们将指令嵌入到user message中
+        # 【最关键的提示词修正】: 每次写作前，都把 premise 作为最高指令传达
         writing_prompt = f"""
 {story_writer.system_message}
 
-**当前任务**: 请根据以下子事件进行创作：
+---
+# **核心设定 (Premise) - 你本次创作必须严格遵守的最高指令**
+`{premise}`
+---
+
+# **当前任务**
+请严格按照上面的【核心设定】，为下面的【子事件】创作故事：
 `{sub_event}`
 """
         
         # 写作
         user_proxy.initiate_chat(story_writer, message=writing_prompt, max_turns=1)
-        generated_story_part = story_writer.last_message()["content"]
+        generated_story_part = story_writer.last_message().get("content", "")
         
         # 批判
         critic_prompt = f"""
@@ -314,22 +335,20 @@ def story_generate(premise: str, event_str: str, id: str, output_prefix: str) ->
 `{generated_story_part}`
 """
         user_proxy.initiate_chat(story_critic, message=critic_prompt, max_turns=1)
-        critic_feedback = story_critic.last_message()["content"]
+        critic_feedback = story_critic.last_message().get("content", "")
         
         print(f"Critic Feedback: {critic_feedback}")
         
         if "APPROVE" in critic_feedback.upper():
             print("Outcome: Approved.")
-            final_story_parts.append(generated_story_part)
         else:
-            print("Outcome: Disapproved, but adding to story anyway (without REJECTED tag).")
-            # 关键改动：无论是否通过，都直接添加原始的故事片段
-            final_story_parts.append(generated_story_part)
+            print("Outcome: Disapproved, but adding to story anyway (as requested).")
+        
+        final_story_parts.append(generated_story_part)
 
     # --- 步骤 3: 保存结果 ---
-    print("\n--- Step 3.3: Saving the final story ---")
+    print("\n--- Step 3: Saving the final story ---")
     
-    # 保存最终故事
     story_dir = os.path.join(output_prefix, "final_story")
     os.makedirs(story_dir, exist_ok=True)
     story_path = os.path.join(story_dir, f"final_story_{id}.json")
