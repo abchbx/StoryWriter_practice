@@ -1,7 +1,7 @@
 import subprocess
 
 processes = []
-for i in range(127):
+for i in range(5):
     process = subprocess.Popen(["python", "./load_premise.py", str(i)])
     processes.append(process)
     print(f"{i}.py running\n\n")
