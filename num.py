@@ -2,7 +2,7 @@ import os
 
 total_files_count = 0
 
-for i in range(4):
+for i in range(128):
     folder_name = str(i)
     final_story_path = os.path.join("./output/"+folder_name, 'final_story')
 

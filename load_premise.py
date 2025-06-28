@@ -29,6 +29,7 @@ for record in data:
 
 
     if os.path.exists(final_events_path):
+        print(f"DEBUG: Loading file: {final_events_path}") # <--- 添加这行来调试
         with open(final_events_path, "r", encoding="utf-8") as file:
             message=json.load(file)
     else:
